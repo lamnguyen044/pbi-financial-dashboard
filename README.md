@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-# CFO Finance Dashboard (Power BI)
-=======
 # Financial Dashboard (Power BI)
->>>>>>> c4e8cc132c8a9c4d823eb251a261fb92b6284ad2
 
 **[Open the live dashboard](https://app.powerbi.com/groups/me/reports/10b0d6fa-b7ab-4053-8677-20c7f64f050e/f0fe1a3a1d1b767dafec?experience=power-bi)** (Power BI Service, sign-in required)
 
