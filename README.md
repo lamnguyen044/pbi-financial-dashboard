@@ -1,5 +1,4 @@
-<<<<<<< HEAD
-# CFO Finance Dashboard (Power BI)
+# Financial Dashboard (Power BI)
 
 An end-to-end Power BI project for a CFO audience: a four-page report covering the **Income Statement with Budget variance, Financial Details by quarter and territory, the Balance Sheet, and the Cash Flow Statement**, built on a star-schema model over a general-ledger (GL) dataset.
 
