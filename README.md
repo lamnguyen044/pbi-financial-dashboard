@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # CFO Finance Dashboard (Power BI)
 
 An end-to-end Power BI project for a CFO audience: a four-page report covering the **Income Statement with Budget variance, Financial Details by quarter and territory, the Balance Sheet, and the Cash Flow Statement**, built on a star-schema model over a general-ledger (GL) dataset.
@@ -542,3 +543,6 @@ All figures are from the source workbook, all territories, in source currency un
 | Equipment (depreciation) | (39,263) |
 | Commissions | (69,483) |
 | **Total** | **(169,064)** |
+=======
+# pbi-financial-dashboard
+>>>>>>> 10a3a574ccaeb755c5ae6d5a289663e2cb6863f8
