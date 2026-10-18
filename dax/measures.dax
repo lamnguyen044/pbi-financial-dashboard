@@ -1,0 +1,344 @@
+// =====================================================================
+// CFO Finance Dashboard - DAX measures (findata GL + synthetic Budget)
+// Put all measures in a dedicated table "_Measures", in display folders.
+// Sign convention (from the GL): income +, expenses -, assets +,
+// liabilities and equity +. So Actual - Budget > 0 is ALWAYS favourable.
+// Logic below was validated in Python against the source data; run the
+// checks in the "Checks" folder in Power BI before review.
+// =====================================================================
+
+// ---------- 0 Base ----------
+GL Amount = SUM ( Fact_GL[Amount] )
+
+Actual =
+CALCULATE ( [GL Amount], KEEPFILTERS ( Dim_Account[Report] = "Profit and Loss" ) )
+
+Budget =
+CALCULATE ( SUM ( Fact_Budget[Amount] ), KEEPFILTERS ( Dim_Account[Report] = "Profit and Loss" ) )
+
+Variance = [Actual] - [Budget]
+
+Variance % = DIVIDE ( [Variance], ABS ( [Budget] ) )
+
+// ---------- 1 Time intelligence ----------
+Actual PY = CALCULATE ( [Actual], SAMEPERIODLASTYEAR ( Dim_Date[Date] ) )
+
+YoY % = DIVIDE ( [Actual] - [Actual PY], ABS ( [Actual PY] ) )
+
+Actual YTD = TOTALYTD ( [Actual], Dim_Date[Date] )
+
+Budget YTD = TOTALYTD ( [Budget], Dim_Date[Date] )
+
+Variance YTD = [Actual YTD] - [Budget YTD]
+
+// ---------- 2 P&L lines (use any base measure through CALCULATE) ----------
+Revenue = CALCULATE ( [Actual], Dim_Account[SubClass] = "Sales" )          // Sales + Sales Return
+Revenue Budget = CALCULATE ( [Budget], Dim_Account[SubClass] = "Sales" )
+COGS = CALCULATE ( [Actual], Dim_Account[SubClass] = "Cost of Sales" )
+Gross Profit = CALCULATE ( [Actual], Dim_Account[Class] = "Trading account" )
+Gross Profit Budget = CALCULATE ( [Budget], Dim_Account[Class] = "Trading account" )
+Gross Margin % = DIVIDE ( [Gross Profit], [Revenue] )
+Operating Expenses = CALCULATE ( [Actual], Dim_Account[Class] = "Operating account" )
+Operating Expenses Budget = CALCULATE ( [Budget], Dim_Account[Class] = "Operating account" )
+
+// EBIT = operating profit: Gross Profit + operating expenses + D&A (Trading + Operating classes).
+// Non-operating income, interest expense and tax sit BELOW EBIT, as on the wireframe.
+EBIT =
+CALCULATE (
+    [Actual],
+    Dim_Account[Class] IN { "Trading account", "Operating account" }
+)
+
+EBIT Budget =
+CALCULATE (
+    [Budget],
+    Dim_Account[Class] IN { "Trading account", "Operating account" }
+)
+
+Net Profit = CALCULATE ( [Actual], REMOVEFILTERS ( Dim_Account ) )
+Net Profit Budget = CALCULATE ( [Budget], REMOVEFILTERS ( Dim_Account ) )
+Net Margin % = DIVIDE ( [Net Profit], [Revenue] )
+
+// ---------- 3 Balance sheet (semi-additive: balance to period end) ----------
+Closing Balance =
+VAR _end = MAX ( Dim_Date[Date] )
+RETURN
+    CALCULATE (
+        [GL Amount],
+        KEEPFILTERS ( Dim_Account[Report] = "Balance Sheet" ),
+        REMOVEFILTERS ( Dim_Date ),
+        Dim_Date[Date] <= _end
+    )
+
+Cash = CALCULATE ( [Closing Balance], Dim_Account[Account] = "Cash & Cash Equivalents" )
+Total Assets = CALCULATE ( [Closing Balance], Dim_Account[Class] = "Assets" )
+Total Liabilities = CALCULATE ( [Closing Balance], Dim_Account[SubClass] = "Liabilities" )
+Total Equity = CALCULATE ( [Closing Balance], Dim_Account[SubClass] = "Owners Equity" )
+Current Assets = CALCULATE ( [Closing Balance], Dim_Account[SubClass2] = "Current Assets" )
+Current Liabilities = CALCULATE ( [Closing Balance], Dim_Account[SubClass2] = "Current Liabilities" )
+Working Capital = [Current Assets] - [Current Liabilities]
+Current Ratio = DIVIDE ( [Current Assets], [Current Liabilities] )
+Quick Ratio =
+DIVIDE ( [Current Assets] - CALCULATE ( [Closing Balance], Dim_Account[Account] = "Inventory" ), [Current Liabilities] )
+Debt to Equity = DIVIDE ( [Total Liabilities], [Total Equity] )
+Debt Ratio = DIVIDE ( [Total Liabilities], [Total Assets] )
+
+Days in Period = COUNTROWS ( Dim_Date )
+DSO = DIVIDE ( CALCULATE ( [Closing Balance], Dim_Account[SubAccount] = "Trade Receivables" ), [Revenue] ) * [Days in Period]
+DIO = DIVIDE ( CALCULATE ( [Closing Balance], Dim_Account[Account] = "Inventory" ), - [COGS] ) * [Days in Period]
+DPO = DIVIDE ( CALCULATE ( [Closing Balance], Dim_Account[SubAccount] = "Trade Payables" ), - [COGS] ) * [Days in Period]
+
+// ---------- 4 Cash flow (indirect method, driven by Dim_CashFlowLine) ----------
+// Dim_CashFlowLine = the CashFlow_St sheet, disconnected (no relationship).
+// ValueType rules (verified: opening + flows = closing, every year and territory):
+//   Opening_balance / Closing_balance = balance before / at period end
+//   All_FTP = movement in period; _Positive / _Negative = only GL rows > 0 / < 0
+//   suffix _CS = change sign
+CF Amount =
+VAR _start = MIN ( Dim_Date[Date] )
+VAR _end = MAX ( Dim_Date[Date] )
+RETURN
+    SUMX (
+        Dim_CashFlowLine,
+        VAR _acct = Dim_CashFlowLine[Account_key]
+        VAR _vt = Dim_CashFlowLine[ValueType]
+        VAR _rows = CALCULATETABLE ( Fact_GL, TREATAS ( { _acct }, Dim_Account[Account_key] ) )
+        VAR _move =
+            SWITCH (
+                TRUE (),
+                CONTAINSSTRING ( _vt, "Positive" ), SUMX ( FILTER ( _rows, Fact_GL[Amount] > 0 ), Fact_GL[Amount] ),
+                CONTAINSSTRING ( _vt, "Negative" ), SUMX ( FILTER ( _rows, Fact_GL[Amount] < 0 ), Fact_GL[Amount] ),
+                SUMX ( _rows, Fact_GL[Amount] )
+            )
+        VAR _open =
+            CALCULATE ( [GL Amount], TREATAS ( { _acct }, Dim_Account[Account_key] ), REMOVEFILTERS ( Dim_Date ), Dim_Date[Date] < _start )
+        VAR _close =
+            CALCULATE ( [GL Amount], TREATAS ( { _acct }, Dim_Account[Account_key] ), REMOVEFILTERS ( Dim_Date ), Dim_Date[Date] <= _end )
+        RETURN
+            SWITCH ( _vt, "Opening_balance", _open, "Closing_balance", _close, IF ( RIGHT ( _vt, 3 ) = "_CS", - _move, _move ) )
+    )
+
+Net Change in Cash = CALCULATE ( [CF Amount], Dim_CashFlowLine[Rank] > 1, Dim_CashFlowLine[Rank] < 18 )
+
+// ---------- 5 P&L layout (matrix that matches the wireframe row by row) ----------
+// Disconnected table PL_Layout, created once with New table:
+//   PL_Layout = DATATABLE ( "Line", STRING, "Order", INTEGER, "Kind", STRING, "KeyFrom", INTEGER, "KeyTo", INTEGER,
+//     { { "Sales",1,"Detail",210,210 }, { "Sales Return",2,"Detail",220,220 }, { "Net Revenue",3,"Total",210,220 },
+//       { "Cost of Sales",4,"Detail",230,230 }, { "Gross Profit",5,"Total",210,230 },
+//       { "Sales & Distribution",6,"Detail",240,259 }, { "Marketing",7,"Detail",260,289 },
+//       { "Administration",8,"Detail",290,369 }, { "Depreciation & Amortization",9,"Detail",370,409 },
+//       { "EBIT",10,"Total",210,409 }, { "Non-operating income",11,"Detail",410,439 },
+//       { "Interest Expense",12,"Detail",440,440 }, { "Taxation",13,"Detail",450,450 },
+//       { "Net Profit",14,"Total",210,450 } } )
+// Then Line > Sort by column > Order. Each line is a range of Account_key in the COA.
+
+PL Actual =
+VAR _lo = SELECTEDVALUE ( PL_Layout[KeyFrom] )
+VAR _hi = SELECTEDVALUE ( PL_Layout[KeyTo] )
+RETURN
+    CALCULATE (
+        [Actual],
+        FILTER ( ALL ( Dim_Account[Account_key] ), Dim_Account[Account_key] >= _lo && Dim_Account[Account_key] <= _hi )
+    )
+
+PL Budget =
+VAR _lo = SELECTEDVALUE ( PL_Layout[KeyFrom] )
+VAR _hi = SELECTEDVALUE ( PL_Layout[KeyTo] )
+RETURN
+    CALCULATE (
+        [Budget],
+        FILTER ( ALL ( Dim_Account[Account_key] ), Dim_Account[Account_key] >= _lo && Dim_Account[Account_key] <= _hi )
+    )
+
+PL Variance = [PL Actual] - [PL Budget]
+
+PL Variance % = DIVIDE ( [PL Variance], ABS ( [PL Budget] ) )
+
+PL Actual PY = CALCULATE ( [PL Actual], SAMEPERIODLASTYEAR ( Dim_Date[Date] ) )
+
+PL YoY % = DIVIDE ( [PL Actual] - [PL Actual PY], ABS ( [PL Actual PY] ) )
+
+PL Is Total = IF ( SELECTEDVALUE ( PL_Layout[Kind] ) = "Total", 1, 0 )
+
+// ---------- 6 Financial Details page (comparison toggle) ----------
+// Disconnected table View_Select, created once with New table:
+//   View_Select = DATATABLE ( "View", STRING, "Order", INTEGER,
+//     { { "Actual", 1 }, { "vs Budget", 2 }, { "vs Last Year", 3 }, { "% of Revenue", 4 } } )
+// Then View > Sort by column > Order. Used as a single-select tile slicer.
+// PL View needs a dynamic format string (Measure tools > Format > Dynamic):
+//   SWITCH ( SELECTEDVALUE ( View_Select[View], "Actual" ), "% of Revenue", "0.0%;(0.0%);-", "#,##0;(#,##0);-" )
+
+PL View =
+SWITCH (
+    SELECTEDVALUE ( View_Select[View], "Actual" ),
+    "Actual", [PL Actual],
+    "vs Budget", [PL Variance],
+    "vs Last Year", IF ( ISBLANK ( [PL Actual PY] ), BLANK (), [PL Actual] - [PL Actual PY] ),
+    "% of Revenue", DIVIDE ( [PL Actual], [Revenue] )
+)
+
+Revenue PY = CALCULATE ( [Revenue], SAMEPERIODLASTYEAR ( Dim_Date[Date] ) )
+
+Revenue Variance = [Revenue] - [Revenue Budget]
+
+Revenue Variance % = DIVIDE ( [Revenue Variance], ABS ( [Revenue Budget] ) )
+
+// Variance chart: follows the toggle; "Actual" and "% of Revenue" fall back to vs Budget
+Revenue Var Selected =
+SWITCH (
+    SELECTEDVALUE ( View_Select[View], "vs Budget" ),
+    "vs Last Year", IF ( ISBLANK ( [Revenue PY] ), BLANK (), [Revenue] - [Revenue PY] ),
+    [Revenue Variance]
+)
+
+// ---------- 7 Balance Sheet page (statement rows driven by BS_Layout) ----------
+// Disconnected table BS_Layout, created once with New table (each row = a range of Account_key in the COA):
+//   BS_Layout = DATATABLE ( "Line", STRING, "Order", INTEGER, "Kind", STRING, "KeyFrom", INTEGER, "KeyTo", INTEGER,
+//     { { "Current Assets",1,"Header",0,0 }, { "Cash & Cash Equivalents",2,"Detail",10,20 },
+//       { "Receivables (net of bad-debt allowance)",3,"Detail",30,50 }, { "Inventory",4,"Detail",60,60 },
+//       { "Investments",5,"Detail",75,75 }, { "Total Current Assets",6,"Subtotal",10,75 },
+//       { "Non-Current Assets",7,"Header",0,0 }, { "Property, Plant & Equipment",8,"Detail",80,90 },
+//       { "Intangible Assets",9,"Detail",100,100 }, { "Total Non-Current Assets",10,"Subtotal",80,100 },
+//       { "Total Assets",11,"Total",10,100 }, { "Current Liabilities",12,"Header",0,0 },
+//       { "Trade Payables",13,"Detail",110,110 }, { "Other Payables",14,"Detail",120,135 },
+//       { "Total Current Liabilities",15,"Subtotal",110,150 }, { "Long Term Liabilities",16,"Header",0,0 },
+//       { "Long Term Obligations",17,"Detail",160,170 }, { "Total Liabilities",18,"Subtotal",110,170 },
+//       { "Owners Equity",19,"Header",0,0 }, { "Share Capital & Premium",20,"Detail",180,190 },
+//       { "Retained Earnings (after dividends)",21,"Detail",200,201 }, { "Total Equity",22,"Subtotal",180,201 },
+//       { "Total Liabilities & Equity",23,"Total",110,201 } } )
+// Calculated column on BS_Layout (indents detail rows), then Sort by column > Order for Line and Line Display:
+//   Line Display = IF ( BS_Layout[Kind] = "Detail", REPT ( UNICHAR ( 160 ), 4 ), "" ) & BS_Layout[Line]
+// Header rows return 0 and the measure format hides zeros: #,##0;(#,##0);
+
+BS Value =
+VAR _kind = SELECTEDVALUE ( BS_Layout[Kind] )
+VAR _lo = SELECTEDVALUE ( BS_Layout[KeyFrom] )
+VAR _hi = SELECTEDVALUE ( BS_Layout[KeyTo] )
+RETURN
+    IF (
+        _kind = "Header",
+        0,
+        CALCULATE (
+            [Closing Balance],
+            FILTER ( ALL ( Dim_Account[Account_key] ), Dim_Account[Account_key] >= _lo && Dim_Account[Account_key] <= _hi )
+        )
+    )
+
+BS Is Total = IF ( SELECTEDVALUE ( BS_Layout[Kind] ) IN { "Subtotal", "Total" }, 1, 0 )
+
+Cash vs PY % =
+VAR _py = CALCULATE ( [Cash], SAMEPERIODLASTYEAR ( Dim_Date[Date] ) )
+RETURN IF ( ISBLANK ( _py ), BLANK (), DIVIDE ( [Cash] - _py, ABS ( _py ) ) )
+
+Total Assets vs PY % =
+VAR _py = CALCULATE ( [Total Assets], SAMEPERIODLASTYEAR ( Dim_Date[Date] ) )
+RETURN IF ( ISBLANK ( _py ), BLANK (), DIVIDE ( [Total Assets] - _py, ABS ( _py ) ) )
+
+Working Capital vs PY =
+VAR _py = CALCULATE ( [Working Capital], SAMEPERIODLASTYEAR ( Dim_Date[Date] ) )
+RETURN IF ( ISBLANK ( _py ), BLANK (), [Working Capital] - _py )
+
+Current Ratio vs PY =
+VAR _py = CALCULATE ( [Current Ratio], SAMEPERIODLASTYEAR ( Dim_Date[Date] ) )
+RETURN IF ( ISBLANK ( _py ), BLANK (), [Current Ratio] - _py )
+
+Debt to Equity vs PY =
+VAR _py = CALCULATE ( [Debt to Equity], SAMEPERIODLASTYEAR ( Dim_Date[Date] ) )
+RETURN IF ( ISBLANK ( _py ), BLANK (), [Debt to Equity] - _py )
+
+BS Check Label =
+IF (
+    ROUND ( [Check BS Balances], 0 ) = 0,
+    "Check passed: Assets = Liabilities + Equity",
+    "Check FAILED: difference " & FORMAT ( [Check BS Balances], "#,##0" )
+)
+
+BS Check Color = IF ( ROUND ( [Check BS Balances], 0 ) = 0, "#0F7B5C", "#C2410C" )
+
+// ---------- 8 Cash Flow page (statement rows driven by CF_Layout, ranges of CashFlow_St Rank) ----------
+// Disconnected table CF_Layout, created once with New table (each row = a range of Dim_CashFlowLine[Rank]):
+//   CF_Layout = DATATABLE ( "Line", STRING, "Order", INTEGER, "Kind", STRING, "RankFrom", INTEGER, "RankTo", INTEGER,
+//     { { "Cash at the start of the year",1,"Total",1,1 }, { "Operating activities",2,"Header",0,0 },
+//       { "Profit before tax",3,"Detail",2,2 }, { "Add back: interest expense",4,"Detail",3,3 },
+//       { "Less: non-operating items",5,"Detail",4,4 }, { "Add back: non-cash items (D&A)",6,"Detail",5,5 },
+//       { "Working capital changes",7,"Detail",6,6 }, { "Interest & tax paid",8,"Detail",7,8 },
+//       { "Net cash from operating activities",9,"Subtotal",2,8 }, { "Investing activities",10,"Header",0,0 },
+//       { "Purchase / sale of non-current assets",11,"Detail",9,10 },
+//       { "Investments, interest & dividends received",12,"Detail",11,13 },
+//       { "Net cash from investing activities",13,"Subtotal",9,13 }, { "Financing activities",14,"Header",0,0 },
+//       { "Share issue & long-term borrowings",15,"Detail",14,15 }, { "Loan repayment & dividends paid",16,"Detail",16,17 },
+//       { "Net cash from financing activities",17,"Subtotal",14,17 }, { "Net change in cash",18,"Subtotal",2,17 },
+//       { "Cash at the end of the year",19,"Total",18,18 } } )
+// Calculated column on CF_Layout: Line Display = IF ( CF_Layout[Kind] = "Detail", REPT ( UNICHAR ( 160 ), 4 ), "" ) & CF_Layout[Line]
+//   (sort Line and Line Display by Order)
+// Calculated columns on Dim_CashFlowLine (for the cash bridge), then sort Section by Section Order:
+//   Section Order = SWITCH ( TRUE (), Dim_CashFlowLine[Rank] = 1, 1, Dim_CashFlowLine[Rank] <= 8, 2, Dim_CashFlowLine[Rank] <= 13, 3, Dim_CashFlowLine[Rank] <= 17, 4, 5 )
+//   Section = SWITCH ( Dim_CashFlowLine[Section Order], 1, "Opening cash", 2, "Operating", 3, "Investing", 4, "Financing", "Closing cash" )
+
+CF Value =
+VAR _kind = SELECTEDVALUE ( CF_Layout[Kind] )
+VAR _lo = SELECTEDVALUE ( CF_Layout[RankFrom] )
+VAR _hi = SELECTEDVALUE ( CF_Layout[RankTo] )
+RETURN
+    IF (
+        _kind = "Header",
+        0,
+        CALCULATE (
+            [CF Amount],
+            FILTER ( ALL ( Dim_CashFlowLine[Rank] ), Dim_CashFlowLine[Rank] >= _lo && Dim_CashFlowLine[Rank] <= _hi )
+        )
+    )
+
+CF Is Total = IF ( SELECTEDVALUE ( CF_Layout[Kind] ) IN { "Subtotal", "Total" }, 1, 0 )
+
+Opening Cash = CALCULATE ( [CF Amount], Dim_CashFlowLine[Rank] = 1 )
+Operating Cash Flow = CALCULATE ( [CF Amount], Dim_CashFlowLine[Rank] >= 2, Dim_CashFlowLine[Rank] <= 8 )
+Investing Cash Flow = CALCULATE ( [CF Amount], Dim_CashFlowLine[Rank] >= 9, Dim_CashFlowLine[Rank] <= 13 )
+Financing Cash Flow = CALCULATE ( [CF Amount], Dim_CashFlowLine[Rank] >= 14, Dim_CashFlowLine[Rank] <= 17 )
+Closing Cash = CALCULATE ( [CF Amount], Dim_CashFlowLine[Rank] = 18 )
+
+// Operating cash flow as a share of net profit (cash conversion)
+Cash Conversion % = DIVIDE ( [Operating Cash Flow], [Net Profit] )
+
+Operating CF vs PY % =
+VAR _py = CALCULATE ( [Operating Cash Flow], SAMEPERIODLASTYEAR ( Dim_Date[Date] ) )
+RETURN IF ( _py = 0, BLANK (), DIVIDE ( [Operating Cash Flow] - _py, ABS ( _py ) ) )
+
+Investing CF vs PY % =
+VAR _py = CALCULATE ( [Investing Cash Flow], SAMEPERIODLASTYEAR ( Dim_Date[Date] ) )
+RETURN IF ( _py = 0, BLANK (), DIVIDE ( [Investing Cash Flow] - _py, ABS ( _py ) ) )
+
+Financing CF vs PY % =
+VAR _py = CALCULATE ( [Financing Cash Flow], SAMEPERIODLASTYEAR ( Dim_Date[Date] ) )
+RETURN IF ( _py = 0, BLANK (), DIVIDE ( [Financing Cash Flow] - _py, ABS ( _py ) ) )
+
+CF Check Label =
+IF (
+    ROUND ( [Check Cash Flow], 0 ) = 0,
+    "Check passed: closing cash = Balance Sheet cash",
+    "Check FAILED: difference " & FORMAT ( [Check Cash Flow], "#,##0" )
+)
+
+CF Check Color = IF ( ROUND ( [Check Cash Flow], 0 ) = 0, "#0F7B5C", "#C2410C" )
+
+// ---------- 8b Income Statement KPI cards (reference labels) ----------
+// Margin change in percentage points (format: +0.0" pp";-0.0" pp")
+Gross Margin vs PY (pp) =
+VAR _py = CALCULATE ( [Gross Margin %], SAMEPERIODLASTYEAR ( Dim_Date[Date] ) )
+RETURN IF ( ISBLANK ( _py ), BLANK (), ( [Gross Margin %] - _py ) * 100 )
+
+// Cost growth: positive = costs went UP (adverse), so colour this label in reverse
+Operating Expenses vs PY % =
+VAR _py = CALCULATE ( [Operating Expenses], SAMEPERIODLASTYEAR ( Dim_Date[Date] ) )
+RETURN IF ( _py = 0, BLANK (), DIVIDE ( ABS ( [Operating Expenses] ) - ABS ( _py ), ABS ( _py ) ) )
+
+// Dynamic headline for the page (card visual, italic)
+Net Profit Variance % = DIVIDE ( [Net Profit] - [Net Profit Budget], ABS ( [Net Profit Budget] ) )
+
+Key Message =
+VAR _p = [Net Profit Variance %]
+RETURN "Net profit is " & FORMAT ( ABS ( _p ), "0%" ) & IF ( _p < 0, " below", " above" ) & " budget"
+
+// ---------- 9 Checks (expected value 0; show on a hidden QA page) ----------
+Check BS Balances = [Total Assets] - [Total Liabilities] - [Total Equity]
+Check Cash Flow = CALCULATE ( [CF Amount], Dim_CashFlowLine[Rank] = 1 ) + [Net Change in Cash] - [Cash]
