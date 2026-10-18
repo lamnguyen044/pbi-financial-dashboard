@@ -1,6 +1,6 @@
 # Financial Dashboard (Power BI)
 
-**[Open the live dashboard]([https://app.powerbi.com/viewr=eyJrIjoiZjk2N2Q4MmQtNTFlMi00NTYxLTk1MjYtYjhkOTlhZGEyNjFlIiwidCI6IjM3MGZiM2I4LTMzMDYtNDg5MC05MDYzLWNjMDhiZTc4ODI1NyIsImMiOjEwfQ%3D%3D])**
+**[Open the live dashboard](https://app.powerbi.com/view?r=eyJrIjoiZjk2N2Q4MmQtNTFlMi00NTYxLTk1MjYtYjhkOTlhZGEyNjFlIiwidCI6IjM3MGZiM2I4LTMzMDYtNDg5MC05MDYzLWNjMDhiZTc4ODI1NyIsImMiOjEwfQ%3D%3D)**
 
 A four-page report for a CFO built on a general ledger: Income Statement, Financial Details, Balance Sheet and Cash Flow, with Actual vs Budget vs prior year. This README covers only the data source, how the data was processed, and the model.
 
