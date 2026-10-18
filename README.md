@@ -111,7 +111,3 @@ Figures were recomputed independently from the source with Python and matched ag
 | `Fact_Budget.csv` | Synthetic Budget |
 | `generate_budget.py` | Script that generates the Budget (seed 2026) |
 | `CFO_Model_and_Budget.xlsx` | Design workbook: model tables, relationships, measures, profiling notes, budget check |
-
-**Not included yet**: a drill-through account-detail page, and scheduled refresh on the Service.
-
-**Author**: _add name and contact_ · **Source data**: _add findata link and licence_
